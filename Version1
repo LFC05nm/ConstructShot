@@ -1,0 +1,230 @@
+import SwiftUI
+import AVFoundation
+import Photos
+
+struct ContentView: View {
+    @State private var timestampLines: [String] = RenameTimestampView.defaultOptions
+    @State private var showTextField: [Bool] = [false, false, false]
+    @State private var showDropdown: [Bool] = [false, false, false]
+    @State private var capturedImage: UIImage?
+    @State private var showCaptureButton: Bool = true
+    @State private var showLocalStorage: Bool = false
+    @State private var savedImages: [UIImage] = []
+    @State private var showRenameTimestamp: Bool = false
+    
+    var body: some View {
+        ZStack {
+            CameraPreview(capturedImage: $capturedImage, timestampLines: timestampLines, showCaptureButton: $showCaptureButton, savedImages: $savedImages)
+                .edgesIgnoringSafeArea(.all)
+            
+            VStack {
+                HStack {
+                    Button(action: {
+                        showRenameTimestamp = true
+                    }) {
+                        Text("Rename Timestamp")
+                            .font(.headline)
+                            .padding()
+                            .background(Color.blue)
+                            .foregroundColor(.white)
+                            .cornerRadius(8)
+                    }
+                    Spacer()
+                    Button(action: {
+                        showLocalStorage = true
+                    }) {
+                        Image(systemName: "folder.fill")
+                            .resizable()
+                            .frame(width: 40, height: 40)
+                            .padding()
+                            .background(Color.gray.opacity(0.8))
+                            .foregroundColor(.white)
+                            .cornerRadius(8)
+                    }
+                }
+                .padding()
+                
+                Spacer()
+                
+                VStack(alignment: .trailing) {
+                    ForEach(0..<3, id: \ .self) { index in
+                        if showDropdown[index] {
+                            Picker("Select an option", selection: $timestampLines[index]) {
+                                ForEach(RenameTimestampView.defaultOptions, id: \ .self) { option in
+                                    Text(option).tag(option)
+                                }
+                            }
+                            .pickerStyle(MenuPickerStyle())
+                        } else {
+                            Text(timestampLines[index])
+                                .foregroundColor(.white)
+                                .padding(10)
+                                .background(Color.black.opacity(0.7))
+                                .cornerRadius(8)
+                                .onTapGesture {
+                                    showDropdown[index] = true
+                                }
+                        }
+                    }
+                }
+                .padding()
+                
+                Button(action: {
+                    capturePhoto()
+                }) {
+                    Text("Capture Photo")
+                        .font(.title2)
+                        .padding()
+                        .background(Color.blue)
+                        .foregroundColor(.white)
+                        .clipShape(Circle())
+                        .padding()
+                }
+            }
+        }
+        .sheet(isPresented: $showRenameTimestamp) {
+            RenameTimestampView(timestampLines: $timestampLines)
+        }
+        .sheet(isPresented: $showLocalStorage) {
+            LocalStorageView(savedImages: savedImages)
+        }
+    }
+    
+    private func capturePhoto() {
+        NotificationCenter.default.post(name: NSNotification.Name("CapturePhoto"), object: nil)
+    }
+}
+
+struct RenameTimestampView: View {
+    static let defaultOptions = ["Option 1", "Option 2", "Option 3"]
+    @Binding var timestampLines: [String]
+    @State private var options: [String] = defaultOptions
+    
+    var body: some View {
+        VStack {
+            Text("Rename Timestamp Options")
+                .font(.largeTitle)
+                .padding()
+            
+            ForEach(0..<options.count, id: \ .self) { index in
+                TextField("Enter new option", text: $options[index])
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .padding()
+            }
+            
+            Button("Save") {
+                timestampLines = options
+            }
+            .padding()
+            .background(Color.blue)
+            .foregroundColor(.white)
+            .cornerRadius(8)
+            
+            Spacer()
+        }
+        .padding()
+    }
+}
+
+struct LocalStorageView: View {
+    var savedImages: [UIImage]
+    
+    var body: some View {
+        VStack {
+            Text("Local Storage")
+                .font(.largeTitle)
+                .padding()
+            
+            ScrollView {
+                ForEach(savedImages, id: \ .self) { image in
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 300, height: 300)
+                        .padding()
+                }
+            }
+        }
+    }
+}
+
+struct CameraPreview: UIViewControllerRepresentable {
+    @Binding var capturedImage: UIImage?
+    var timestampLines: [String]
+    @Binding var showCaptureButton: Bool
+    @Binding var savedImages: [UIImage]
+    
+    func makeUIViewController(context: Context) -> CameraViewController {
+        let controller = CameraViewController()
+        controller.capturedImage = $capturedImage
+        controller.timestampLines = timestampLines
+        controller.showCaptureButton = $showCaptureButton
+        controller.savedImages = $savedImages
+        return controller
+    }
+    
+    func updateUIViewController(_ uiViewController: CameraViewController, context: Context) {
+        uiViewController.timestampLines = timestampLines
+    }
+}
+
+class CameraViewController: UIViewController, AVCapturePhotoCaptureDelegate {
+    var capturedImage: Binding<UIImage?>!
+    var timestampLines: [String] = []
+    var showCaptureButton: Binding<Bool>!
+    var savedImages: Binding<[UIImage]>!
+    
+    let captureSession = AVCaptureSession()
+    var previewLayer: AVCaptureVideoPreviewLayer!
+    var captureOutput = AVCapturePhotoOutput()
+    
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        setupCamera()
+        
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(capturePhoto),
+            name: NSNotification.Name("CapturePhoto"),
+            object: nil
+        )
+    }
+    
+    func setupCamera() {
+        captureSession.sessionPreset = .photo
+        guard let backCamera = AVCaptureDevice.default(for: .video) else { return }
+        
+        do {
+            let input = try AVCaptureDeviceInput(device: backCamera)
+            if captureSession.canAddInput(input) {
+                captureSession.addInput(input)
+            }
+            if captureSession.canAddOutput(captureOutput) {
+                captureSession.addOutput(captureOutput)
+            }
+            
+            previewLayer = AVCaptureVideoPreviewLayer(session: captureSession)
+            previewLayer.videoGravity = .resizeAspectFill
+            previewLayer.frame = view.layer.bounds
+            view.layer.addSublayer(previewLayer)
+            
+            captureSession.startRunning()
+        } catch {
+            print("Error setting up camera input: \(error)")
+        }
+    }
+    
+    @objc func capturePhoto() {
+        let settings = AVCapturePhotoSettings()
+        captureOutput.capturePhoto(with: settings, delegate: self)
+    }
+    
+    func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
+        guard let imageData = photo.fileDataRepresentation(),
+              let image = UIImage(data: imageData) else { return }
+        
+        capturedImage.wrappedValue = image
+        savedImages.wrappedValue.append(image)
+        showCaptureButton.wrappedValue = true
+    }
+}
