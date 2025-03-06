@@ -1,0 +1,492 @@
+import SwiftUI
+import AVFoundation
+import Photos
+
+struct ContentView: View {
+    @State private var timestampText: String = ""
+    @State private var projectText: String = "PROJECT"
+    @State private var areaText: String = "AREA"
+    @State private var tradeText: String = "TRADE"
+    @State private var isShowingRenameSheet = false
+    @State private var isShowingStorageView = false
+    @State private var newTimestampText: String = ""
+    @State private var newProjectText: String = ""
+    @State private var newAreaText: String = ""
+    @State private var newTradeText: String = ""
+    @State private var timestampOffset: CGSize = .zero
+    @State private var isDragging = false
+
+    @State private var projectOptions = ["Project A", "Project B", "Project C"]
+    @State private var areaOptions = ["Area 1", "Area 2", "Area 3"]
+    @State private var tradeOptions = ["Trade X", "Trade Y", "Trade Z"]
+
+    var body: some View {
+        ZStack {
+            CameraPreview(timestampText: $timestampText, projectText: $projectText, areaText: $areaText, tradeText: $tradeText, timestampOffset: $timestampOffset)
+                .edgesIgnoringSafeArea(.all)
+            
+            VStack {
+                HStack {
+                    Button(action: {
+                        isShowingStorageView = true
+                    }) {
+                        Text("Storage")
+                            .padding()
+                            .background(Color.black.opacity(0.7))
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
+                            .padding()
+                    }
+                    Spacer()
+                    Button("Rename Timestamp") {
+                        showRenameSheet()
+                    }
+                    .padding()
+                    .background(Color.black.opacity(0.7))
+                    .foregroundColor(.white)
+                    .cornerRadius(10)
+                    .padding()
+                }
+                Spacer()
+                VStack(alignment: .leading) {
+                    Picker("Project", selection: $projectText) {
+                        ForEach(projectOptions, id: \.self) {
+                            Text($0)
+                        }
+                    }
+                    .pickerStyle(MenuPickerStyle())
+
+                    Picker("Area", selection: $areaText) {
+                        ForEach(areaOptions, id: \.self) {
+                            Text($0)
+                        }
+                    }
+                    .pickerStyle(MenuPickerStyle())
+
+                    Picker("Trade", selection: $tradeText) {
+                        ForEach(tradeOptions, id: \.self) {
+                            Text($0)
+                        }
+                    }
+                    .pickerStyle(MenuPickerStyle())
+
+                    Text(timestampText)
+                }
+                .font(.system(size: 14))
+                .foregroundColor(.white)
+                .padding(16)
+                .background(Color.black.opacity(0.5))
+                .cornerRadius(5)
+                .offset(timestampOffset)
+                .gesture(
+                    DragGesture()
+                        .onChanged { value in
+                            timestampOffset = value.translation
+                            isDragging = true
+                        }
+                        .onEnded { _ in
+                            isDragging = false
+                        }
+                )
+                .onAppear(perform: updateTimestamp)
+                
+                Button(action: capturePhoto) {
+                    Text("Capture Photo")
+                        .padding()
+                        .background(Color.blue)
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
+                        .padding(.bottom, 20)
+                }
+            }
+        }
+        .sheet(isPresented: $isShowingRenameSheet) {
+            RenameSheetView(timestampText: $newTimestampText, projectText: $newProjectText, areaText: $newAreaText, tradeText: $newTradeText, isShowingRenameSheet: $isShowingRenameSheet, projectOptions: $projectOptions, areaOptions: $areaOptions, tradeOptions: $tradeOptions, onSave: saveRename)
+        }
+        .sheet(isPresented: $isShowingStorageView) {
+            StorageView(isShowingStorageView: $isShowingStorageView, projectOptions: $projectOptions, areaOptions: $areaOptions, tradeOptions: $tradeOptions)
+        }
+    }
+
+    private func showRenameSheet() {
+        newTimestampText = timestampText
+        newProjectText = projectText
+        newAreaText = areaText
+        newTradeText = tradeText
+        isShowingRenameSheet = true
+    }
+
+    private func saveRename() {
+        timestampText = newTimestampText
+        projectText = newProjectText
+        areaText = newAreaText
+        tradeText = newTradeText
+        isShowingRenameSheet = false
+    }
+
+    private func updateTimestamp() {
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        timestampText = dateFormatter.string(from: Date())
+    }
+
+    private func capturePhoto() {
+        // Trigger the photo capture functionality in the CameraViewController
+        NotificationCenter.default.post(name: .capturePhoto, object: nil)
+    }
+}
+
+extension Notification.Name {
+    static let capturePhoto = Notification.Name("capturePhoto")
+}
+
+struct CameraPreview: UIViewControllerRepresentable {
+    @Binding var timestampText: String
+    @Binding var projectText: String
+    @Binding var areaText: String
+    @Binding var tradeText: String
+    @Binding var timestampOffset: CGSize
+
+    func makeUIViewController(context: Context) -> CameraViewController {
+        let controller = CameraViewController()
+        controller.timestampText = $timestampText
+        controller.projectText = $projectText
+        controller.areaText = $areaText
+        controller.tradeText = $tradeText
+        controller.timestampOffset = $timestampOffset
+        return controller
+    }
+
+    func updateUIViewController(_ uiViewController: CameraViewController, context: Context) {}
+}
+
+class CameraViewController: UIViewController, AVCapturePhotoCaptureDelegate, AVCaptureVideoDataOutputSampleBufferDelegate {
+    private var captureSession: AVCaptureSession!
+    private var videoPreviewLayer: AVCaptureVideoPreviewLayer!
+    private var photoOutput: AVCapturePhotoOutput!
+    var timestampText: Binding<String>!
+    var projectText: Binding<String>!
+    var areaText: Binding<String>!
+    var tradeText: Binding<String>!
+    var timestampOffset: Binding<CGSize>!
+    
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        
+        setupCaptureSession()
+        setupPreviewLayer()
+        
+        NotificationCenter.default.addObserver(self, selector: #selector(capturePhoto), name: .capturePhoto, object: nil)
+        
+        captureSession.startRunning()
+    }
+    
+    private func setupCaptureSession() {
+        captureSession = AVCaptureSession()
+        captureSession.sessionPreset = .high
+        
+        guard let backCamera = AVCaptureDevice.default(for: .video) else {
+            print("Unable to access back camera!")
+            return
+        }
+        
+        do {
+            let input = try AVCaptureDeviceInput(device: backCamera)
+            captureSession.addInput(input)
+        } catch let error {
+            print("Error Unable to initialize back camera:  \(error.localizedDescription)")
+        }
+        
+        let videoOutput = AVCaptureVideoDataOutput()
+        videoOutput.setSampleBufferDelegate(self, queue: DispatchQueue(label: "videoQueue"))
+        captureSession.addOutput(videoOutput)
+        
+        photoOutput = AVCapturePhotoOutput()
+        captureSession.addOutput(photoOutput)
+    }
+    
+    private func setupPreviewLayer() {
+        videoPreviewLayer = AVCaptureVideoPreviewLayer(session: captureSession)
+        videoPreviewLayer.videoGravity = .resizeAspectFill
+        videoPreviewLayer.frame = view.layer.bounds
+        view.layer.addSublayer(videoPreviewLayer)
+    }
+    
+    @objc private func capturePhoto() {
+        let settings = AVCapturePhotoSettings()
+        photoOutput.capturePhoto(with: settings, delegate: self)
+    }
+    
+    func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
+        guard let imageData = photo.fileDataRepresentation() else { return }
+        guard let image = UIImage(data: imageData) else { return }
+        
+        // Draw the timestamp onto the image
+        let timestampedImage = drawTimestampOnImage(image: image)
+
+        // Save the image to the photo library
+        PHPhotoLibrary.shared().performChanges({
+            PHAssetChangeRequest.creationRequestForAsset(from: timestampedImage)
+        }, completionHandler: { success, error in
+            if success {
+                print("Photo saved to library")
+            } else {
+                print("Error saving photo: \(String(describing: error))")
+            }
+        })
+        
+        // Save the image and metadata to local storage
+        saveImageToLocalStorage(image: timestampedImage)
+    }
+    
+    private func drawTimestampOnImage(image: UIImage) -> UIImage {
+        let renderer = UIGraphicsImageRenderer(size: image.size)
+        let timestampedImage = renderer.image { context in
+            image.draw(at: .zero)
+            
+            let paragraphStyle = NSMutableParagraphStyle()
+            paragraphStyle.alignment = .left
+            
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: UIFont.systemFont(ofSize: 40),
+                .foregroundColor: UIColor.white,
+                .paragraphStyle: paragraphStyle,
+                .backgroundColor: UIColor.black.withAlphaComponent(0.5)
+            ]
+            
+            let text = "\(projectText.wrappedValue)\n\(areaText.wrappedValue)\n\(tradeText.wrappedValue)\n\(timestampText.wrappedValue)"
+            let offset = timestampOffset.wrappedValue
+            let textRect = CGRect(x: offset.width, y: image.size.height - 200 + offset.height, width: image.size.width, height: 200)
+            text.draw(in: textRect, withAttributes: attributes)
+        }
+        return timestampedImage
+    }
+    
+    private func saveImageToLocalStorage(image: UIImage) {
+        let filename = UUID().uuidString
+        let timestamp = timestampText.wrappedValue
+        let project = projectText.wrappedValue
+        let area = areaText.wrappedValue
+        let trade = tradeText.wrappedValue
+        
+        let imagePath = getDocumentsDirectory().appendingPathComponent("\(filename).jpg")
+        if let jpegData = image.jpegData(compressionQuality: 0.8) {
+            try? jpegData.write(to: imagePath, options: [.atomic, .completeFileProtection])
+        }
+        
+        let metadata = ["timestamp": timestamp, "project": project, "area": area, "trade": trade]
+        UserDefaults.standard.set(metadata, forKey: filename)
+    }
+    
+    private func getDocumentsDirectory() -> URL {
+        let paths = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
+        return paths[0]
+    }
+    
+    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        // This is where you can process the camera frames if needed
+    }
+}
+
+struct RenameSheetView: View {
+    @Binding var timestampText: String
+    @Binding var projectText: String
+    @Binding var areaText: String
+    @Binding var tradeText: String
+    @Binding var isShowingRenameSheet: Bool
+    @Binding var projectOptions: [String]
+    @Binding var areaOptions: [String]
+    @Binding var tradeOptions: [String]
+    var onSave: () -> Void
+
+    @State private var selectedProject: String = ""
+    @State private var selectedArea: String = ""
+    @State private var selectedTrade: String = ""
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section(header: Text("Timestamp")) {
+                    TextField("Enter new timestamp", text: $timestampText)
+                }
+                Section(header: Text("Project")) {
+                    Picker("Select Project", selection: $selectedProject) {
+                        ForEach(projectOptions, id: \.self) {
+                            Text($0)
+                        }
+                    }
+                    TextField("Or enter new project", text: $projectText, onCommit: {
+                        if !projectText.isEmpty && !projectOptions.contains(projectText) {
+                            projectOptions.append(projectText)
+                        }
+                    })
+                }
+                Section(header: Text("Area")) {
+                    Picker("Select Area", selection: $selectedArea) {
+                        ForEach(areaOptions, id: \.self) {
+                            Text($0)
+                        }
+                    }
+                    TextField("Or enter new area", text: $areaText, onCommit: {
+                        if !areaText.isEmpty && !areaOptions.contains(areaText) {
+                            areaOptions.append(areaText)
+                        }
+                    })
+                }
+                Section(header: Text("Trade")) {
+                    Picker("Select Trade", selection: $selectedTrade) {
+                        ForEach(tradeOptions, id: \.self) {
+                            Text($0)
+                        }
+                    }
+                    TextField("Or enter new trade", text: $tradeText, onCommit: {
+                        if !tradeText.isEmpty && !tradeOptions.contains(tradeText) {
+                            tradeOptions.append(tradeText)
+                        }
+                    })
+                }
+            }
+            .navigationBarTitle("Rename Timestamp", displayMode: .inline)
+            .navigationBarItems(leading: Button("Cancel") {
+                isShowingRenameSheet = false
+            }, trailing: Button("Save") {
+                if !selectedProject.isEmpty {
+                    projectText = selectedProject
+                }
+                if !selectedArea.isEmpty {
+                    areaText = selectedArea
+                }
+                if !selectedTrade.isEmpty {
+                    tradeText = selectedTrade
+                }
+                onSave()
+            })
+        }
+    }
+}
+
+struct StorageView: View {
+    @Binding var isShowingStorageView: Bool
+    @Binding var projectOptions: [String]
+    @Binding var areaOptions: [String]
+    @Binding var tradeOptions: [String]
+
+    @State private var selectedProject: String = ""
+    @State private var selectedArea: String = ""
+    @State private var selectedTrade: String = ""
+    @State private var selectedImages: Set<String> = []
+    @State private var imageScale: CGFloat = 1.0
+
+    var body: some View {
+        NavigationView {
+            VStack {
+                Form {
+                    Section(header: Text("Filters")) {
+                        Picker("Project", selection: $selectedProject) {
+                            ForEach(projectOptions, id: \.self) {
+                                Text($0)
+                            }
+                        }
+                        Picker("Area", selection: $selectedArea) {
+                            ForEach(areaOptions, id: \.self) {
+                                Text($0)
+                            }
+                        }
+                        Picker("Trade", selection: $selectedTrade) {
+                            ForEach(tradeOptions, id: \.self) {
+                                Text($0)
+                            }
+                        }
+                    }
+                    
+                    Section(header: Text("Captured Photos")) {
+                        ForEach(getFilteredImages(), id: \.self) { imageDetails in
+                            HStack {
+                                Image(uiImage: imageDetails.image)
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(width: 100 * imageScale, height: 100 * imageScale)
+                                    .onTapGesture {
+                                        if selectedImages.contains(imageDetails.id) {
+                                            selectedImages.remove(imageDetails.id)
+                                        } else {
+                                            selectedImages.insert(imageDetails.id)
+                                        }
+                                    }
+                                    .border(Color.blue, width: selectedImages.contains(imageDetails.id) ? 2 : 0)
+                                Text(imageDetails.metadata["timestamp"] ?? "")
+                            }
+                        }
+                    }
+                }
+                .navigationBarTitle("Storage", displayMode: .inline)
+                .navigationBarItems(leading: Button("Close") {
+                    isShowingStorageView = false
+                }, trailing: HStack {
+                    Button("Export Selected") {
+                        exportSelectedImages()
+                    }
+                    Button("Export All") {
+                        exportAllImages()
+                    }
+                })
+                
+                Slider(value: $imageScale, in: 0.5...2.0, step: 0.1)
+                    .padding()
+            }
+        }
+    }
+    
+    private func getFilteredImages() -> [ImageDetails] {
+        var images: [ImageDetails] = []
+        let fileManager = FileManager.default
+        let documentsDirectory = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        
+        do {
+            let fileURLs = try fileManager.contentsOfDirectory(at: documentsDirectory, includingPropertiesForKeys: nil)
+            for fileURL in fileURLs {
+                if let metadata = UserDefaults.standard.dictionary(forKey: fileURL.deletingPathExtension().lastPathComponent) as? [String: String],
+                   (selectedProject.isEmpty || metadata["project"] == selectedProject),
+                   (selectedArea.isEmpty || metadata["area"] == selectedArea),
+                   (selectedTrade.isEmpty || metadata["trade"] == selectedTrade),
+                   let image = UIImage(contentsOfFile: fileURL.path) {
+                    images.append(ImageDetails(id: fileURL.deletingPathExtension().lastPathComponent, image: image, metadata: metadata))
+                }
+            }
+        } catch {
+            print("Error while enumerating files \(documentsDirectory.path): \(error.localizedDescription)")
+        }
+        
+        return images
+    }
+    
+    private func exportSelectedImages() {
+        let images = getFilteredImages().filter { selectedImages.contains($0.id) }
+        exportImages(images)
+    }
+    
+    private func exportAllImages() {
+        let images = getFilteredImages()
+        exportImages(images)
+    }
+    
+    private func exportImages(_ images: [ImageDetails]) {
+        for imageDetails in images {
+            PHPhotoLibrary.shared().performChanges({
+                PHAssetChangeRequest.creationRequestForAsset(from: imageDetails.image)
+            }, completionHandler: { success, error in
+                if success {
+                    print("Photo exported to camera roll")
+                } else {
+                    print("Error exporting photo: \(String(describing: error))")
+                }
+            })
+        }
+    }
+}
+
+struct ImageDetails: Hashable {
+    var id: String
+    var image: UIImage
+    var metadata: [String: String]
+}
